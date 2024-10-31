@@ -10,85 +10,113 @@
 
 /* Statement to avoid link error */
 #ifdef __cplusplus
-extern void* __dso_handle;
+extern void *__dso_handle;
 #endif
 
 namespace mros2
 {
 
-void init(int argc, char * argv[]);
+  void init(int argc, char *argv[]);
 
 #ifdef __cplusplus
-extern "C" {
+  extern "C"
+  {
 #endif
-void mros2_init(void *arg);
+    void mros2_init(void *arg);
 #ifdef __cplusplus
-}
+  }
 #endif
 
-class Node;
-class Publisher;
-class Subscriber;
+  class Node;
+  class Publisher;
+  class Subscriber;
 
-/* TODO: move to node.h/cpp? */
-class Node
-{
-public:
-  static Node create_node(
-    std::string node_name
-  );
+  /* TODO: move to node.h/cpp? */
+  class Node
+  {
+  public:
+    static Node create_node(
+        std::string node_name);
 
-  template <class T>
-  Publisher create_publisher(
-    std::string topic_name,
-    int qos
-  );
+    /*service communication for client*/
+    template <class T>
+    Publisher create_service_publisher(
+        std::string topic_name,
+        int qos);
 
-  template <class T>
-  Subscriber create_subscription(
-    std::string topic_name,
-    int qos,
-    void (*fp)(T*)
-  );
+    template <class T>
+    Subscriber create_service_subscription(
+        std::string topic_name,
+        int qos,
+        void (*fp)(T *));
 
-  std::string node_name;
-  rtps::Participant* part;
+    /*service communication for server*/
+    template <class T>
+    Publisher create_service_server_publisher(
+        std::string topic_name,
+        int qos);
 
-private:
+    template <class T>
+    Subscriber create_service_server_subscription(
+        std::string topic_name,
+        int qos,
+        void (*fp)(T *));
 
-};
+    /*service debug */
+    // Subscriber create_service_subscription_debug(
+    //     std::string topic_name,
+    //     int qos,
+    //     void (*fp)(T *));
 
-class Publisher
-{
-public:
-  std::string topic_name;
-  template <class T>
-  void publish(T& msg);
-};
+    template <class T>
+    Publisher create_publisher(
+        std::string topic_name,
+        int qos);
 
-class Subscriber
-{
-public:
-  std::string topic_name;
-  template <class T> 
-  static void callback_handler(
-    void* callee,
-    const rtps::ReaderCacheChange& cacheChange
-  );
-  void (*cb_fp)(intptr_t);
-private:
-};
+    template <class T>
+    Subscriber create_subscription(
+        std::string topic_name,
+        int qos,
+        void (*fp)(T *));
 
-void spin();
+    std::string node_name;
+    rtps::Participant *part;
 
-}  /* namespace mros2 */
+  private:
+  };
+
+  class Publisher
+  {
+  public:
+    std::string topic_name;
+    template <class T>
+    void publish(T &msg);
+  };
+
+  class Subscriber
+  {
+  public:
+    std::string topic_name;
+    template <class T>
+    static void callback_handler(
+        void *callee,
+        const rtps::ReaderCacheChange &cacheChange);
+    void (*cb_fp)(intptr_t);
+
+  private:
+  };
+
+  void spin();
+
+} /* namespace mros2 */
 
 namespace message_traits
 {
-template <class T>
-struct TypeName {
-static const char* value();
-};
-}  /* namespace message_traits */
+  template <class T>
+  struct TypeName
+  {
+    static const char *value();
+  };
+} /* namespace message_traits */
 
 #endif /* MROS2_MROS2_H */
