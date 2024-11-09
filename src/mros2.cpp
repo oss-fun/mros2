@@ -440,6 +440,16 @@ namespace mros2
     const uint8_t *cacheData = cacheChange.getData(); // dataのpointerを取得
     msg.copyFromBuf(&cacheData[4]);                   // copyFromBufはメッセージクラスにある関数
 
+    // // for service communication
+    // CacheChangeInfo info;
+    // info.writerGuid = cacheChange.writerGuid;
+    // info.sequenceNumber = cacheChange.sn;
+
+    // {
+    //   std::lock_guard<std::mutex> lock(bufferMutex);
+    //   cacheChangeQueue.push(info);
+    // }
+
     SubscribeDataType *sub = (SubscribeDataType *)callee;
     void (*fp)(intptr_t) = sub->cb_fp;
     fp((intptr_t)&msg);
