@@ -12,11 +12,17 @@
 #ifdef __cplusplus
 extern void *__dso_handle;
 #endif
+// const uint8_t *cacheChange_buffer;
+// for service communication
+#include <map>
+#include <mutex>
+#include <future>
 
 namespace mros2
 {
 
   void init(int argc, char *argv[]);
+  /*service communication for client*/
 
 #ifdef __cplusplus
   extern "C"
@@ -38,17 +44,16 @@ namespace mros2
     static Node create_node(
         std::string node_name);
 
-    /*service communication for client*/
     template <class T>
-    Publisher create_service_publisher(
+    Publisher create_client_publisher(
         std::string topic_name,
-        int qos);
+        int qos, std::string type_name);
 
     template <class T>
-    Subscriber create_service_subscription(
+    Subscriber create_client_subscription(
         std::string topic_name,
         int qos,
-        void (*fp)(T *));
+        void (*fp)(T *), std::string type_name);
 
     /*service communication for server*/
     template <class T>
@@ -90,7 +95,7 @@ namespace mros2
   public:
     std::string topic_name;
     template <class T>
-    void publish(T &msg);
+    std::future<uint8_t *> publish(T &msg);
   };
 
   class Subscriber
@@ -107,6 +112,7 @@ namespace mros2
   };
 
   void spin();
+  int spin_until_future_complete(mros2::Node node, std::future<uint8_t *> *response);
 
 } /* namespace mros2 */
 

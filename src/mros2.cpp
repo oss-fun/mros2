@@ -10,6 +10,17 @@
 #include "cmsis_os.h"
 #endif /* __MBED__ */
 
+// for service
+#include <condition_variable>
+#include <map>
+#include <future>
+
+// std::mutex mtx;             // wait で必要（とりあえず無視）
+// std::condition_variable cv; // これを介して睡眠をコントロールする
+extern uint8_t *cacheChange_buffer;
+std::map<uint32_t, std::promise<uint8_t *>> promise_map;
+std::mutex map_mutex;
+uint8_t *cacheChange_buffer;
 namespace mros2
 {
 
@@ -154,15 +165,28 @@ namespace mros2
    *  service releated create functions
    */
 
+  // void useresponse_received_processingrCallback(std_msgs::msg::Int64 *msg)
+  // {
+  //   // printf("subscribed msg: '%s'\r\n", msg->data.c_str());
+  //   printf("subscribed msg: calculation sum:'%ld'\r\n", msg->data);
+  // }
+
+  int spin_until_future_complete(Node node, std::future<uint8_t *> *response)
+  {
+    response->wait();
+    return 0;
+  }
+
   // 現状client側のpublisherのみ対応
   template <class T>
-  Publisher Node::create_service_publisher(std::string topic_name, int qos)
+  Publisher Node::create_client_publisher(std::string topic_name, int qos, std::string type_name)
   {
     // rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name).c_str(), message_traits::TypeName<T *>().value(), false);
     // add_two_intsようにtype_nameを指定
     // rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name).c_str(), "example_interfaces::srv::dds_::AddTwoInts_Request_", false);
     // reliablity=True
-    rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name).c_str(), "example_interfaces::srv::dds_::AddTwoInts_Request_", true);
+    // rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name + "Request").c_str(), "example_interfaces::srv::dds_::AddTwoInts_Request_", true);
+    rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name + "Request").c_str(), type_name.c_str(), true);
     // rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name).c_str(), "CalculatorRequestType", false); // fastdds-exempleようにtype_nameを指定
 
     if (writer == nullptr)
@@ -173,7 +197,7 @@ namespace mros2
       }
     }
 
-    Publisher pub;
+    Publisher pub; // publish宣言も含む
     pub_ptr = writer;
     pub.topic_name = topic_name;
 
@@ -191,10 +215,11 @@ namespace mros2
 
   // 現状client側のsubscriberのみ対応
   template <class T>
-  Subscriber Node::create_service_subscription(std::string topic_name, int qos, void (*fp)(T *))
+  Subscriber Node::create_client_subscription(std::string topic_name, int qos, void (*fp)(T *), std::string type_name)
   {
     // rtps::Reader *reader = domain_ptr->createReader(*(this->part), ("rr/" + topic_name).c_str(), message_traits::TypeName<T *>().value(), false);
-    rtps::Reader *reader = domain_ptr->createReader(*(this->part), ("rr/" + topic_name).c_str(), "example_interfaces::srv::dds_::AddTwoInts_Response_", true); // for add_two_ints
+    // rtps::Reader *reader = domain_ptr->createReader(*(this->part), ("rr/" + topic_name + "Reply").c_str(), "example_interfaces::srv::dds_::AddTwoInts_Response_", true); // for add_two_ints
+    rtps::Reader *reader = domain_ptr->createReader(*(this->part), ("rr/" + topic_name + "Reply").c_str(), type_name.c_str(), true); // for add_two_ints
     if (reader == nullptr)
     {
       MROS2_ERROR("[MROS2LIB] ERROR: failed to create reader in create_subscription()");
@@ -339,7 +364,7 @@ namespace mros2
   }
 
   template <class T>
-  void Publisher::publish(T &msg)
+  std::future<uint8_t *> Publisher::publish(T &msg)
   {
     auto func = [&msg]
     {
@@ -381,6 +406,7 @@ namespace mros2
       return std::make_pair(frag_buf, (rtps::DataSize_t)(len));
     };
 
+    // messege size が指定地より大きい場合は、nullpointerを返す関数を呼ぶ=送信しない
     if (sizeof(buf) < msg.calcTotalSize())
     {
       pub_ptr->newChangeCallback(rtps::ChangeKind_t::ALIVE,
@@ -390,8 +416,22 @@ namespace mros2
     {
       msg.copyToBuf(&buf[4]);
       msg.memAlign(&buf[4]);
-      pub_ptr->newChange(rtps::ChangeKind_t::ALIVE, buf,
-                         msg.getTotalSize() + 4);
+      // pub_ptr->newChange(rtps::ChangeKind_t::ALIVE, buf,
+      //                    msg.getTotalSize() + 4);
+      rtps::CacheChange *result = const_cast<rtps::CacheChange *>(pub_ptr->newChange(rtps::ChangeKind_t::ALIVE, buf, msg.getTotalSize() + 4));
+      // for service通信
+      // sequenceNumberを取得して、別の変数にセット
+      SequenceNumber_t sequenceNumber_pub = result->sequenceNumber;
+      MROS2_DEBUG("[MROS2LIB] sequenceNumber_pub: %d", sequenceNumber_pub.low);
+
+      // promise
+      std::promise<uint8_t *> promise;
+      auto future = promise.get_future();
+      {
+        std::lock_guard<std::mutex> lock(map_mutex);
+        promise_map[sequenceNumber_pub.low] = std::move(promise);
+      }
+      return future;
     }
   }
 
@@ -433,6 +473,7 @@ namespace mros2
     return sub;
   }
 
+  // intptr_t *msg_buffer;
   template <class T>
   void Subscriber::callback_handler(void *callee, const rtps::ReaderCacheChange &cacheChange)
   {
@@ -449,6 +490,38 @@ namespace mros2
     //   std::lock_guard<std::mutex> lock(bufferMutex);
     //   cacheChangeQueue.push(info);
     // }
+
+    // for service通信
+    cacheChange_buffer = const_cast<uint8_t *>(cacheChange.getData());
+    const uint32_t response = cacheChange.response;
+    const uint32_t response_id = cacheChange.sn.low;
+    if (response != 0)
+    {
+      // resposeがある場合は、サービスレスポンスが受信された場合
+      MROS2_DEBUG("[MROS2LIB] service response get [callback_handler]");
+      // serviceが来たことを通知
+      // cv.notify_one();
+
+      std::promise<uint8_t *> promise;
+      {
+        std::lock_guard<std::mutex> lock(map_mutex);
+        auto it = promise_map.find(response_id);
+        if (it != promise_map.end())
+        {
+          promise = std::move(it->second);
+          promise_map.erase(it);
+        }
+        else
+        {
+          // エラー処理：対応するPromiseが見つからない
+          MROS2_DEBUG("[MROS2LIB] エラー処理:対応するPromiseが見つからない");
+          return;
+        }
+      }
+
+      // Promiseに値を設定
+      promise.set_value(cacheChange_buffer);
+    }
 
     SubscribeDataType *sub = (SubscribeDataType *)callee;
     void (*fp)(intptr_t) = sub->cb_fp;
