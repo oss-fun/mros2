@@ -45,6 +45,11 @@ namespace mros2
         std::string node_name);
 
     template <class T>
+    Publisher create_client(
+        std::string topic_name,
+        int qos);
+
+    template <class T>
     Publisher create_client_publisher(
         std::string topic_name,
         int qos, std::string type_name);
@@ -95,7 +100,9 @@ namespace mros2
   public:
     std::string topic_name;
     template <class T>
-    std::future<uint8_t *> publish(T &msg);
+    void publish(T &msg);
+    template <class T>
+    std::future<uint8_t *> async_send_request(T &msg);
   };
 
   class Subscriber
@@ -113,6 +120,8 @@ namespace mros2
 
   void spin();
   int spin_until_future_complete(mros2::Node node, std::future<uint8_t *> *response);
+  // void response_received_processingrCallback(uint8_t *msg)
+  int wait_service(int timeout);
 
 } /* namespace mros2 */
 

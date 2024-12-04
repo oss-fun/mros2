@@ -47,6 +47,9 @@ namespace mros2
   bool subMatched = false;
   bool pubMatched = false;
 
+  bool client_subMatched = false;
+  bool client_pubMatched = false;
+
   void pubMatch(void *args)
   {
     MROS2_DEBUG("[MROS2LIB] publisher matched with remote subscriber");
@@ -55,6 +58,18 @@ namespace mros2
   void subMatch(void *args)
   {
     MROS2_DEBUG("[MROS2LIB] subscriber matched with remote publisher");
+  }
+
+  void client_pubMatch(void *args)
+  {
+    client_pubMatched = true;
+    MROS2_DEBUG("[MROS2LIB] [service] client:publisher matched with remote subscriber");
+  }
+
+  void client_subMatch(void *args)
+  {
+    client_subMatched = true;
+    MROS2_DEBUG("[MROS2LIB] [service] client:subscriber matched with remote publisher");
   }
 
 /*
@@ -161,15 +176,88 @@ namespace mros2
     return node;
   }
 
+  typedef struct
+  {
+    void (*cb_fp)(intptr_t);
+    intptr_t argp;
+  } SubscribeDataType;
+
   /*
    *  service releated create functions
    */
+  void response_received_processingrCallback(uint8_t *msg)
+  {
+    // printf("subscribed msg: '%s'\r\n", msg->data.c_str());
+    // printf("subscribed msg: calculation sum:'%ld'\r\n", msg->data);
+  }
 
-  // void useresponse_received_processingrCallback(std_msgs::msg::Int64 *msg)
-  // {
-  //   // printf("subscribed msg: '%s'\r\n", msg->data.c_str());
-  //   printf("subscribed msg: calculation sum:'%ld'\r\n", msg->data);
-  // }
+  int wait_service(int timeout)
+  {
+    int time_sec = timeout * 1000;
+    while (!client_subMatched && !client_pubMatched)
+    {
+      MROS2_DEBUG("[MROS2LIB] waiting for service to be matched");
+      osDelay(time_sec);
+    }
+    return 0;
+  }
+
+  template <class T>
+  Publisher Node::create_client(std::string topic_name, int qos)
+  {
+
+    rtps::Writer *writer = domain_ptr->createWriter(*part_ptr, ("rq/" + topic_name + "Request").c_str(), message_traits::TypeName<T *>().request_type(), true);
+
+    if (writer == nullptr)
+    {
+      MROS2_ERROR("[MROS2LIB] ERROR: failed to create writer in create_publisher()");
+      while (true)
+      {
+      }
+    }
+
+    Publisher pub; // publish宣言も含む
+    pub_ptr = writer;
+    pub.topic_name = topic_name; // この設定は何に使う？間違った値が入っていても動く
+
+    /* Register callback to ensure that a publisher is matched to the writer before sending messages */
+    part_ptr->registerOnNewSubscriberMatchedCallback(client_pubMatch, &subMatched);
+    MROS2_DEBUG("[MROS2LIB] create_publisher complete.");
+
+    /*
+    init service subsctiber
+    */
+    // mros2::Subscriber sub = create_client_subscription<T>("add_two_ints", 10, response_received_processingrCallback, message_traits::TypeName<T *>().response_type());
+
+    rtps::Reader *reader = domain_ptr->createReader(*(this->part), ("rr/" + topic_name + "Reply").c_str(), message_traits::TypeName<T *>().response_type(), true); // for add_two_ints
+    if (reader == nullptr)
+    {
+      MROS2_ERROR("[MROS2LIB] ERROR: failed to create reader in create_subscription()");
+      while (true)
+      {
+      }
+    }
+
+    Subscriber sub;
+    sub.topic_name = topic_name; // この設定は何に使う？
+    // void *fp = response_received_processingrCallback; // 一旦定義
+    void (*fp)(uint8_t *) = response_received_processingrCallback;
+    sub.cb_fp = (void (*)(intptr_t))fp; // 関数の扱い
+
+    SubscribeDataType *data_p;
+    data_p = new SubscribeDataType;
+    data_p->cb_fp = (void (*)(intptr_t))fp;
+    data_p->argp = (intptr_t)NULL;
+    reader->registerCallback(sub.callback_handler<T>, (void *)data_p); // templeteの関数を登録
+
+    /* Register callback to ensure that a subscriber is matched to the reader before receiving messages */
+    part_ptr->registerOnNewPublisherMatchedCallback(client_subMatch, &pubMatched);
+
+    MROS2_DEBUG("[MROS2LIB] create_subscription complete.");
+    // return sub;
+
+    return pub;
+  }
 
   int spin_until_future_complete(Node node, std::future<uint8_t *> *response)
   {
@@ -207,11 +295,6 @@ namespace mros2
     MROS2_DEBUG("[MROS2LIB] create_publisher complete.");
     return pub;
   }
-  typedef struct
-  {
-    void (*cb_fp)(intptr_t);
-    intptr_t argp;
-  } SubscribeDataType;
 
   // 現状client側のsubscriberのみ対応
   template <class T>
@@ -364,7 +447,7 @@ namespace mros2
   }
 
   template <class T>
-  std::future<uint8_t *> Publisher::publish(T &msg)
+  std::future<uint8_t *> Publisher::async_send_request(T &msg)
   {
     auto func = [&msg]
     {
@@ -435,6 +518,78 @@ namespace mros2
     }
   }
 
+  template <class T>
+  void Publisher::publish(T &msg)
+  {
+    auto func = [&msg]
+    {
+      rtps::DataSize_t len = 0;
+      rtps::DataSize_t mod_len = 0;
+      size_t cdr_enc_offset = 0;
+
+      if (0 == msg.getPubCnt())
+      {
+        cdr_enc_offset = 4;
+        frag_buf[0] = 0;
+        frag_buf[1] = 1;
+        frag_buf[2] = 0;
+        frag_buf[3] = 0;
+      }
+
+      auto ret = msg.copyToFragBuf(&frag_buf[cdr_enc_offset],
+                                   sizeof(frag_buf) - cdr_enc_offset);
+      len = ret.second + cdr_enc_offset;
+      if (ret.first)
+      {
+        if (0 < ret.second)
+        {
+          mod_len = len % 4;
+          if (mod_len > 0)
+          {
+            for (int i = 0; i < (4 - mod_len); i++)
+            {
+              frag_buf[len++] = 0;
+            }
+          }
+        }
+        else
+        {
+          msg.resetCount();
+        }
+      }
+
+      return std::make_pair(frag_buf, (rtps::DataSize_t)(len));
+    };
+
+    // messege size が指定地より大きい場合は、nullpointerを返す関数を呼ぶ=送信しない
+    if (sizeof(buf) < msg.calcTotalSize())
+    {
+      pub_ptr->newChangeCallback(rtps::ChangeKind_t::ALIVE,
+                                 func, msg.calcTotalSize());
+    }
+    else
+    {
+      msg.copyToBuf(&buf[4]);
+      msg.memAlign(&buf[4]);
+      // pub_ptr->newChange(rtps::ChangeKind_t::ALIVE, buf,
+      //                    msg.getTotalSize() + 4);
+      rtps::CacheChange *result = const_cast<rtps::CacheChange *>(pub_ptr->newChange(rtps::ChangeKind_t::ALIVE, buf, msg.getTotalSize() + 4));
+      // for service通信
+      // sequenceNumberを取得して、別の変数にセット
+      SequenceNumber_t sequenceNumber_pub = result->sequenceNumber;
+      MROS2_DEBUG("[MROS2LIB] sequenceNumber_pub: %d", sequenceNumber_pub.low);
+
+      // promise
+      // std::promise<uint8_t *> promise;
+      // auto future = promise.get_future();
+      // {
+      //   std::lock_guard<std::mutex> lock(map_mutex);
+      //   promise_map[sequenceNumber_pub.low] = std::move(promise);
+      // }
+      // return future;
+    }
+  }
+
   /*
    *  Subscriber functions
    */
@@ -495,6 +650,15 @@ namespace mros2
     cacheChange_buffer = const_cast<uint8_t *>(cacheChange.getData());
     const uint32_t response = cacheChange.response;
     const uint32_t response_id = cacheChange.sn.low;
+
+    // for service server test
+    const uint32_t service_msg_sn_high = cacheChange.identify.sn.high;
+    const uint32_t service_msg_sn_low = cacheChange.identify.sn.low;
+    // const uint8_t writer_id = cacheChange.identify.writerId.entityKind;
+    const std::array<uint8_t, 3> entityKey = cacheChange.identify.writerId.entityKey; // writer_id: 0003 0100  -> 0001 0300
+    // const uint32_t writer_id = 1;
+    MROS2_DEBUG("[MROS2LIB] service response get [callback_handler] entityKey: %lx entityKey: %lx entityKey: %lx entityKey: %lx service_msg_sn_high: %lx service_msg_sn_low: %lx", entityKey, entityKey[0], entityKey[1], entityKey[2], service_msg_sn_high, service_msg_sn_low);
+
     if (response != 0)
     {
       // resposeがある場合は、サービスレスポンスが受信された場合
