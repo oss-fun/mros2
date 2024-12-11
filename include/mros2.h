@@ -17,6 +17,7 @@ extern void *__dso_handle;
 #include <map>
 #include <mutex>
 #include <future>
+#include "rtps/common/types.h" //sample_identify struct
 
 namespace mros2
 {
@@ -61,16 +62,22 @@ namespace mros2
         void (*fp)(T *), std::string type_name);
 
     /*service communication for server*/
+    template <class T, class U>
+    Subscriber create_service(
+        std::string topic_name,
+        int qos,
+        void (*fp)(T(*), U(*)));
+
     template <class T>
     Publisher create_service_server_publisher(
         std::string topic_name,
         int qos);
 
-    template <class T>
+    template <class T, class U>
     Subscriber create_service_server_subscription(
         std::string topic_name,
         int qos,
-        void (*fp)(T *));
+        void (*fp)(T(*), U(*)));
 
     /*service debug */
     // Subscriber create_service_subscription_debug(
@@ -99,6 +106,7 @@ namespace mros2
   {
   public:
     std::string topic_name;
+    rtps::Writer *pub_ptr_own = NULL;
     template <class T>
     void publish(T &msg);
     template <class T>
@@ -109,11 +117,18 @@ namespace mros2
   {
   public:
     std::string topic_name;
+    rtps::Writer *pub_ptr_own = NULL;
     template <class T>
     static void callback_handler(
         void *callee,
         const rtps::ReaderCacheChange &cacheChange);
+    // for service communication
+    template <class T, class U>
+    static void service_callback_handler(
+        void *callee,
+        const rtps::ReaderCacheChange &cacheChange);
     void (*cb_fp)(intptr_t);
+    void (*cb_fp_srv)(intptr_t, intptr_t);
 
   private:
   };
