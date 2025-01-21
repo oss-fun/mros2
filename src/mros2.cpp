@@ -26,6 +26,8 @@ std::mutex map_mutex;
 std::queue<rtps::Sample_Indetify> request_identify_queue;
 std::mutex queue_mutex;
 uint8_t *cacheChange_buffer;
+
+std::mutex msg_mtx;
 namespace mros2
 {
 
@@ -846,7 +848,8 @@ namespace mros2
     // const uint8_t writer_id = cacheChange.identify.writerId.entityKind;
     const std::array<uint8_t, 3> entityKey = cacheChange.identify.writerId.entityKey; // writer_id: 0003 0100  -> 0001 0300
     // const uint32_t writer_id = 1;
-    MROS2_DEBUG("[MROS2LIB] service response get [callback_handler] entityKey: %lx entityKey: %lx entityKey: %lx entityKey: %lx service_msg_sn_high: %lx service_msg_sn_low: %lx", entityKey, entityKey[0], entityKey[1], entityKey[2], service_msg_sn_high, service_msg_sn_low);
+    // MROS2_DEBUG("[MROS2LIB] service response get [callback_handler] entityKey: %lx entityKey: %lx entityKey: %lx entityKey: %lx service_msg_sn_high: %lx service_msg_sn_low: %lx", entityKey, entityKey[0], entityKey[1], entityKey[2], service_msg_sn_high, service_msg_sn_low);
+    MROS2_DEBUG("[MROS2LIB] message get [callback_handler] msg_sn_high: %lx msg_sn_low: %lx", service_msg_sn_high, service_msg_sn_low);
 
     request_identify.guidPrefix = cacheChange.writerGuid.prefix;
     request_identify.writerId = cacheChange.writerGuid.entityId;
@@ -883,7 +886,21 @@ namespace mros2
 
     SubscribeDataType *sub = (SubscribeDataType *)callee;
     void (*fp)(intptr_t) = sub->cb_fp;
-    fp((intptr_t)&msg);
+    // fp((intptr_t)&msg);
+    // コールバックをスレッドで分離
+    std::thread th([fp, &msg, cacheData]()
+                   {
+                    //msgのコピーをしたい。msgのポインタを渡すと、コールバック関数内でmsgの値が変わる可能性があるため
+                     T msg_copy;
+                     msg_copy.copyFromBuf(&cacheData[4]);
+                    std::lock_guard<std::mutex> lock(msg_mtx);
+
+
+                    fp((intptr_t)&msg_copy); });
+    th.detach();
+
+    // th.join();
+    // osDelay(10); // msgの処理が終わるまで待つ msgの排他制御の代わり
   }
 
   /*
