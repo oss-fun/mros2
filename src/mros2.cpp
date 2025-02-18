@@ -18,7 +18,7 @@
 // #include "rtps/common/types.h" //sample_identify struct
 
 // std::mutex mtx;             // wait で必要（とりあえず無視）
-// std::condition_variable cv; // これを介して睡眠をコントロールする
+// std::condition_variable cv; // これを介してスリープをコントロールする
 extern uint8_t *cacheChange_buffer;
 std::map<uint32_t, std::promise<uint8_t *>> promise_map;
 std::mutex map_mutex;
@@ -43,6 +43,7 @@ namespace mros2
   uint32_t subCbArray[10];
 
   uint8_t buf[100], frag_buf[64];
+  // uint8_t buf[1000], frag_buf[1000];
   uint8_t buf_index = 4;
 
   /* Callback function to set the boolean to true upon a match */
@@ -849,7 +850,8 @@ namespace mros2
     const std::array<uint8_t, 3> entityKey = cacheChange.identify.writerId.entityKey; // writer_id: 0003 0100  -> 0001 0300
     // const uint32_t writer_id = 1;
     // MROS2_DEBUG("[MROS2LIB] service response get [callback_handler] entityKey: %lx entityKey: %lx entityKey: %lx entityKey: %lx service_msg_sn_high: %lx service_msg_sn_low: %lx", entityKey, entityKey[0], entityKey[1], entityKey[2], service_msg_sn_high, service_msg_sn_low);
-    MROS2_DEBUG("[MROS2LIB] message get [callback_handler] msg_sn_high: %lx msg_sn_low: %lx", service_msg_sn_high, service_msg_sn_low);
+    // MROS2_DEBUG("[MROS2LIB] message get [callback_handler] msg_sn_high: %lx msg_sn_low: %lx", service_msg_sn_high, service_msg_sn_low);
+    MROS2_DEBUG("[MROS2LIB] message get [callback_handler] msg_sn_high: %lx msg_sn_low: %lx", cacheChange.sn.high, cacheChange.sn.low);
 
     request_identify.guidPrefix = cacheChange.writerGuid.prefix;
     request_identify.writerId = cacheChange.writerGuid.entityId;
